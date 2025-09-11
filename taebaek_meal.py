@@ -288,7 +288,7 @@ with col2:
     """)
 
 st.markdown("---")
-st.info("📌 이 서비스는 나이스 교육정보 개-방 포털의 API를 활용하여 제작되었습니다. | 💼 영양교사 업무 지원 도구")
+st.info("📌 이 서비스는 나이스 교육정보 개-방 포털의 API를 활용하여 제작되었습니다.")
 
 # 푸터
 st.markdown("""
@@ -296,4 +296,5 @@ st.markdown("""
     <p>🍚 태백지역 학교 급식 메뉴 통합 조회 서비스 | Made with ❤️ for 권영우</p>
 </div>
 """, unsafe_allow_html=True)
+
 
