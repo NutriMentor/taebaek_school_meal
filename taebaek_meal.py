@@ -293,8 +293,9 @@ st.info("📌 이 서비스는 나이스 교육정보 개-방 포털의 API를 �
 # 푸터
 st.markdown("""
 <div style="text-align: center; color: #7f8c8d; margin-top: 2rem; font-size: 14px;">
-    <p>🍚 태백지역 학교 급식 메뉴 통합 조회 서비스 | Made with ❤️ for 권영우</p>
+    <p>🍚 태백지역 학교 급식 메뉴 통합 조회 서비스 | Made by 권영우</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
