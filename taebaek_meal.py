@@ -161,7 +161,7 @@ def create_school_menu_table(school_data, meal_name):
     return html
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="태백지역학교 급식 메뉴", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="태백지역 학교 급식 메뉴", layout="wide", initial_sidebar_state="collapsed")
 
 # (스타일 부분은 이전과 동일하여 생략)
 st.markdown("""
@@ -296,6 +296,7 @@ st.markdown("""
     <p>🍚 태백지역 학교 급식 메뉴 통합 조회 서비스 | Made by 권영우</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
