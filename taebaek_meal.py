@@ -174,7 +174,7 @@ st.markdown("""
 # 페이지 제목
 st.markdown("""
 <h1 style="text-align: center; color: #2c3e50; margin-bottom: 2rem; font-size: 2.5rem; font-weight: bold;">
-    🏫 태백지역학교 급식 메뉴 조회
+    🏫 태백 학교 급식 메뉴 조회
 </h1>
 """, unsafe_allow_html=True)
 
@@ -296,6 +296,7 @@ st.markdown("""
     <p>🍚 태백지역 학교 급식 메뉴 통합 조회 서비스 | Made by 권영우</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
