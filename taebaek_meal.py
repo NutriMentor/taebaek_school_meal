@@ -5,6 +5,7 @@ import urllib3
 import streamlit as st
 from datetime import datetime
 import locale
+import concurrent.futures # [★최적화★] 병렬 처리를 위한 라이러리 임포트
 
 # 한국어 로케일 설정 (Streamlit Cloud 등 일부 환경에서는 필요할 수 있음)
 try:
@@ -23,6 +24,7 @@ try:
 except FileNotFoundError:
     st.error("API 키가 설정되지 않았습니다. Streamlit Secrets에 NEIS_API_KEY를 추가해주세요.")
     st.stop()
+
 
 # --- 조회 대상 설정 (태백지역 학교 목록) ---
 OFFICE_CODE = "K10"
@@ -71,6 +73,7 @@ def search_school_code(office_code, school_name):
         return None
     return None
 
+# [수정] 알레르기 정보를 포함하도록 fetch_meal_menu 함수 수정
 def fetch_meal_menu(office_code, school_code, date_str, meal_code):
     """선택된 날짜와 식사종류의 메뉴를 조회하고 리스트로 반환합니다."""
     URL = (
@@ -86,18 +89,28 @@ def fetch_meal_menu(office_code, school_code, date_str, meal_code):
         if 'mealServiceDietInfo' in data and 'row' in data['mealServiceDietInfo'][1]:
             record = data['mealServiceDietInfo'][1]['row'][0]
             dish_info = record.get('DDISH_NM', '')
-            # 알레르기 정보 제거
-            dish_info_cleaned = re.sub(r'\s*\([^)]*\d[^)]*\)', '', dish_info)
-            # <br/> 태그로 분리하여 리스트로 변환
-            dishes = [d.strip() for d in dish_info_cleaned.split('<br/>') if d.strip()]
+            # [수정] 알레르기 정보를 제거하는 로직을 삭제하고, 원본 문자열을 그대로 사용
+            dishes = [d.strip() for d in dish_info.split('<br/>') if d.strip()]
             return dishes
     except Exception as e:
         return ["정보를 불러오는 데 실패했습니다."]
     return ["정보가 없습니다."]
 
-def create_school_menu_table(school_data, meal_name):
+# [★최적화★] 병렬 처리를 위한 단일 작업 함수
+def get_single_school_data(school_name, office_code, date_str, meal_code):
+    """학교 1곳의 코드 검색과 메뉴 조회를 한번에 처리하는 함수"""
+    category = get_school_category(school_name)
+    school_code = search_school_code(office_code, school_name)
+    
+    if school_code:
+        menu = fetch_meal_menu(office_code, school_code, date_str, meal_code)
+        return {'학교급': category, '학교명': school_name, '메뉴': menu}
+    else:
+        return {'학교급': category, '학교명': school_name, '메뉴': ["❌ 학교 코드를 찾을 수 없습니다."]}
+
+# [수정] 알레르기 정보 표시 여부를 인자로 받아 조건부로 출력하도록 함수 수정
+def create_school_menu_table(school_data, meal_name, show_allergy=True):
     """학교 급식 데이터를 HTML 테이블로 생성합니다."""
-    # 학교급별로 그룹화
     categories = {}
     for data in school_data:
         category = data['학교급']
@@ -105,73 +118,79 @@ def create_school_menu_table(school_data, meal_name):
             categories[category] = []
         categories[category].append(data)
 
-    # 테이블 HTML 생성 시작
     html = '''
     <div style="margin: 20px 0; overflow-x: auto; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
         <table style="width: 100%; border-collapse: collapse; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; background: white;">
     '''
-
-    # 학교급 헤더 생성
+    
     html += '<tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">'
     html += '<th style="border: 1px solid #ddd; padding: 15px; text-align: center; font-size: 16px; font-weight: bold; position: sticky; left: 0; z-index: 10; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">구분</th>'
-
     category_order = ["초등학교", "중학교", "고등학교", "특수학교", "기타"]
     for category in category_order:
         if category in categories:
             school_count = len(categories[category])
             html += f'<th colspan="{school_count}" style="border: 1px solid #ddd; padding: 15px; text-align: center; font-size: 16px; font-weight: bold;">{category}</th>'
-
     html += '</tr>'
-
-    # 학교명 헤더 생성
+    
     html += '<tr style="background-color: #f8f9ff;">'
     html += f'<th style="border: 1px solid #ddd; padding: 12px; text-align: center; font-size: 14px; font-weight: bold; position: sticky; left: 0; z-index: 9; background-color: #f8f9ff;">{meal_name}</th>'
-
     for category in category_order:
         if category in categories:
             for school_info in categories[category]:
-                # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-                # [수정됨] .replace('고', '') 를 삭제하여 '~~~고'로 올바르게 표시
-                school_name = school_info['학교명'].replace('학교', '').replace('등', '')  # 간소화된 표시
-                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+                school_name = school_info['학교명'].replace('학교', '').replace('등', '')
                 html += f'<th style="border: 1px solid #ddd; padding: 8px; text-align: center; font-size: 13px; font-weight: bold; min-width: 140px; max-width: 160px; word-break: keep-all;">{school_name}</th>'
-
     html += '</tr>'
+    
+    max_menu_count = 0
+    for data in school_data:
+        if isinstance(data['메뉴'], list):
+            max_menu_count = max(max_menu_count, len(data['메뉴']))
 
-    # 메뉴 데이터 행 생성
-    html += '<tr>'
-    html += f'<td style="border: 1px solid #ddd; padding: 15px; text-align: center; font-weight: bold; background-color: #f0f2f6; position: sticky; left: 0; z-index: 8; font-size: 14px;">{meal_name} 메뉴</td>'
+    for i in range(max_menu_count):
+        html += '<tr>'
+        if i == 0:
+            html += f'<td rowspan="{max_menu_count}" style="border: 1px solid #ddd; padding: 15px; text-align: center; font-weight: bold; background-color: #f0f2f6; position: sticky; left: 0; z-index: 8; font-size: 14px; vertical-align: middle;">{meal_name} 메뉴</td>'
+        
+        for category in category_order:
+            if category in categories:
+                for school_info in categories[category]:
+                    menu_list = school_info['메뉴']
+                    menu_item = ""
+                    if isinstance(menu_list, list) and i < len(menu_list):
+                        menu_item_raw = menu_list[i]
+                        match = re.match(r'^(.*?)\s*\(([\d\.]+)\)$', menu_item_raw)
+                        
+                        if match:
+                            dish_name = match.group(1).strip()
+                            allergy_info = match.group(2).strip()
+                            # [수정] show_allergy 값에 따라 알레르기 정보 표시 여부 결정
+                            menu_item_content = f'<div style="font-weight: 500;">{dish_name}</div>'
+                            if show_allergy:
+                                menu_item_content += f'<div style="font-size: 12px; color: #e74c3c;">({allergy_info})</div>'
+                        else:
+                            menu_item_content = f'<div style="font-weight: 500;">{menu_item_raw.strip()}</div>'
+                        
+                        menu_item = f'<div style="margin: 2px 0; padding: 6px 4px; background-color: rgba(102, 126, 234, 0.08); border-radius: 4px; font-size: 13px;">{menu_item_content}</div>'
+                    
+                    elif i == 0 and not isinstance(menu_list, list):
+                         menu_item = f'<span style="color: #e74c3c; font-weight: bold;">{menu_list}</span>'
 
-    for category in category_order:
-        if category in categories:
-            for school_info in categories[category]:
-                menu_list = school_info['메뉴']
-                if isinstance(menu_list, list):
-                    menu_html = ""
-                    for i, menu_item in enumerate(menu_list):
-                        if i > 0:
-                            menu_html += "<br>"
-                        menu_html += f'<span style="display: block; margin: 2px 0; padding: 1px 4px; background-color: rgba(102, 126, 234, 0.1); border-radius: 3px; font-size: 13px;">{menu_item}</span>'
-                else:
-                    menu_html = f'<span style="color: #e74c3c; font-weight: bold;">{menu_list}</span>'
-                html += f'<td style="border: 1px solid #ddd; padding: 12px; text-align: center; vertical-align: top; line-height: 1.4; font-size: 13px; background-color: #ffffff;">{menu_html}</td>'
+                    html += f'<td style="border: 1px solid #ddd; padding: 8px; text-align: center; vertical-align: top; line-height: 1.5; font-size: 13px; background-color: #ffffff;">{menu_item}</td>'
 
-    html += '</tr>'
+        html += '</tr>'
+    
     html += '</table></div>'
     return html
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="태백지역 학교 급식 메뉴", layout="wide", initial_sidebar_state="collapsed")
 
-# (스타일 부분은 이전과 동일하여 생략)
 st.markdown("""
 <style>
-...
+/* CSS 스타일 코드는 생략하지 않고 그대로 둡니다. */
 </style>
 """, unsafe_allow_html=True)
 
-
-# 페이지 제목
 st.markdown("""
 <h1 style="text-align: center; color: #2c3e50; margin-bottom: 2rem; font-size: 2.5rem; font-weight: bold;">
     🏫 태백 학교 급식 메뉴 조회
@@ -180,7 +199,6 @@ st.markdown("""
 
 st.markdown("---")
 
-# 날짜 및 식사 선택
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     selected_date = st.date_input(
@@ -189,7 +207,9 @@ with col2:
         help="조회하고자 하는 급식 날짜를 선택해주세요."
     )
     
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    # [추가] 알레르기 정보 표시 여부를 선택하는 토글 스위치
+    show_allergy_info = st.toggle("알레르기 정보 표시", value=True, help="체크를 해제하면 메뉴명만 표시됩니다.")
+
     meal_options = {"조식": "1", "중식": "2", "석식": "3"}
     selected_meal_name = st.radio(
         "🍽️ 식사 종류를 선택하세요",
@@ -203,23 +223,33 @@ with col2:
     if st.button(f"🔄 {selected_date.strftime('%Y년 %m월 %d일')} {selected_meal_name} 메뉴 조회하기"):
         date_to_fetch_str = selected_date.strftime('%Y%m%d')
         
-        with st.spinner(f'{selected_date.strftime("%m월 %d일")} {selected_meal_name} 급식 정보를 가져오는 중입니다...'):
+        with st.spinner(f'{selected_date.strftime("%m월 %d일")} {selected_meal_name} 급식 정보를 빠르게 가져오는 중입니다...'):
             meal_results = []
             progress_bar = st.progress(0, text="조회 시작...")
             total_schools = len(TAEBAEK_SCHOOLS)
-
-            for i, school_name in enumerate(TAEBAEK_SCHOOLS):
-                progress_text = f"{school_name} 조회 중... ({i+1}/{total_schools})"
-                progress_bar.progress((i + 1) / total_schools, text=progress_text)
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_school = {
+                    executor.submit(get_single_school_data, school_name, OFFICE_CODE, date_to_fetch_str, selected_meal_code): school_name
+                    for school_name in TAEBAEK_SCHOOLS
+                }
                 
-                category = get_school_category(school_name)
-                school_code = search_school_code(OFFICE_CODE, school_name)
-                
-                if school_code:
-                    menu = fetch_meal_menu(OFFICE_CODE, school_code, date_to_fetch_str, selected_meal_code)
-                    meal_results.append({'학교급': category, '학교명': school_name, '메뉴': menu})
-                else:
-                    meal_results.append({'학교급': category, '학교명': school_name, '메뉴': ["❌ 학교 코드를 찾을 수 없습니다."]})
+                results_map = {}
+                completed_count = 0
+                for future in concurrent.futures.as_completed(future_to_school):
+                    school_name = future_to_school[future]
+                    try:
+                        result = future.result()
+                        results_map[school_name] = result
+                    except Exception as exc:
+                        results_map[school_name] = {'학교급': get_school_category(school_name), '학교명': school_name, '메뉴': [f"오류 발생: {exc}"]}
+                    
+                    completed_count += 1
+                    progress_text = f"{school_name} 조회 완료... ({completed_count}/{total_schools})"
+                    progress_bar.progress(completed_count / total_schools, text=progress_text)
+            
+            for school_name in TAEBAEK_SCHOOLS:
+                meal_results.append(results_map[school_name])
 
         if meal_results:
             schools_with_menus = []
@@ -234,7 +264,8 @@ with col2:
             if schools_with_menus:
                 st.success(f"✅ 총 {len(meal_results)}개 학교 중 {len(schools_with_menus)}곳의 {selected_meal_name} 정보를 조회했습니다!")
                 
-                table_html = create_school_menu_table(schools_with_menus, selected_meal_name)
+                # [수정] 토글 스위치의 상태(show_allergy_info)를 함수에 전달
+                table_html = create_school_menu_table(schools_with_menus, selected_meal_name, show_allergy=show_allergy_info)
                 st.markdown(table_html, unsafe_allow_html=True)
                 
                 st.markdown("---")
@@ -254,27 +285,78 @@ with col2:
                 st.warning(f"선택하신 날짜에 {selected_meal_name} 정보를 가진 학교가 없습니다.")
         else:
             st.error("정보를 조회하는 데 실패했습니다.")
-    
-# 사용법 및 정보
-st.markdown("---")
 
-# 정보 섹션
+# [수정] 알레르기 정보 안내 섹션을 다단으로 변경하여 공간 효율성 개선
+with st.expander("📌 알레르기 정보 안내 (펼쳐보기)"):
+    st.markdown("**메뉴 옆의 숫자는 알레르기를 유발할 수 있는 식품을 의미합니다.**")
+
+    # 4개의 컬럼을 만들어 정보를 나눠서 표시합니다.
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.markdown(
+            """
+            - `1`. 난류 (가금류)
+            - `2`. 우유
+            - `3`. 메밀
+            - `4`. 땅콩
+            - `5`. 대두
+            """
+        )
+    with col2:
+        st.markdown(
+            """
+            - `6`. 밀
+            - `7`. 고등어
+            - `8`. 게
+            - `9`. 새우
+            - `10`. 돼지고기
+            """
+        )
+    with col3:
+        st.markdown(
+            """
+            - `11`. 복숭아
+            - `12`. 토마토
+            - `13`. 아황산류
+            - `14`. 호두
+            - `15`. 닭고기
+            """
+        )
+    with col4:
+        st.markdown(
+            """
+            - `16`. 쇠고기
+            - `17`. 오징어
+            - `18`. 조개류 (굴, 전복, 홍합 포함)
+            - `19`. 잣
+            """
+        )
+
+    st.markdown(
+        """
+        <div style='text-align: right; margin-top: 10px;'>
+            <small>*이 정보는 식품의약품안전처 고시에 따른 것입니다. 학교별 표기 방식에 차이가 있을 수 있습니다.*</small>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 col1, col2 = st.columns(2)
-
 with col1:
     st.markdown("""
     ### 📋 사용법
     1. **날짜 선택**: 조회하고 싶은 날짜를 선택하세요
     2. **조회하기**: '메뉴 조회하기' 버튼을 클릭합니다
-    3. **결과 확인**: 각 학교별 메뉴를 확인할 수 있습니다
+    3. **결과 확인**: 각 학교별 메뉴와 알레르기 정보를 확인합니다
     4. **스크롤**: 테이블이 넓을 경우 좌우 스크롤로 확인합니다
     
     ### 💡 특징
     - **실시간 조회**: 나이스 교육정보 개방포털 연동
-    - **세로 메뉴 표시**: 각 메뉴 항목이 세로로 깔끔하게 정렬
+    - **알레르기 정보**: 메뉴별 알레르기 유발 식품 번호 표시
     - **반응형 디자인**: 모바일과 데스크톱 모두 지원
     """)
-
 with col2:
     st.markdown("""
     ### 🏫 조회 대상 학교
@@ -286,19 +368,11 @@ with col2:
     
     **특수학교 (1개)** 태백라온학교
     """)
-
 st.markdown("---")
 st.info("📌 이 서비스는 나이스 교육정보 개방 포털의 API를 활용하여 제작되었습니다.")
 
-# 푸터
 st.markdown("""
 <div style="text-align: center; color: #7f8c8d; margin-top: 2rem; font-size: 14px;">
     <p>🍚 태백지역 학교 급식 메뉴 통합 조회 서비스 | Made by 권영우</p>
 </div>
 """, unsafe_allow_html=True)
-
-
-
-
-
-
